@@ -10,23 +10,68 @@ int player_x = 10;   // Posição x do jogador
 int player_y = 30;    // Posição y do jogador
 pthread_mutex_t mutex;
 
-
 struct Enemy {
-	int enemy_y; 
-	int enemy_x;
-	int enemy_life;
+	int y; 
+	int x;
+	int life;
 };
 
 struct Game {
 	int max_qt_bullets;
 	int current_qt_bullets; 
-	int max_qt_enemy;
-	int current_qt_enemy;
+	int qt_enemy;
+	int qt_destroyed_enemy;
+	int fall_velocity;
+	int difficulty_level;
 } game;
+
+struct Bullet {
+	int y;
+	int x;
+	int life;
+	int direction_x;
+	int direction_y;
+	char img[0];
+};
+
+struct EnemiesList {
+    struct Enemy *enemies;
+} enemy_list;  
+
+
+struct BulletsList {
+    struct Bullet *bullets;
+} bullet_list;  
+
 
 int game_state = 0;
 
-// Função para desenhar o jogador na tela
+void set_difficulty(int difficulty_level) {
+	switch (difficulty_level) {
+		case 1: //Easy
+			game.max_qt_bullets = 10;
+			game.qt_enemy = 10;
+			game.fall_velocity = 1;
+			printf("> Dificuldade alterada para facil!\n");
+			
+		break;
+		case 2: //Medium (default)
+			game.max_qt_bullets = 7;
+			game.qt_enemy = 16;
+			game.fall_velocity = 2;
+			printf("> Dificuldade alterada para medio!\n");
+		break;
+		case 3: //Hard
+			game.max_qt_bullets = 4;
+			game.qt_enemy = 20;
+			game.fall_velocity = 3;
+			printf("> Dificuldade alterada para dificil!\n");
+		break;
+	}
+	game.difficulty_level = difficulty_level;
+	game.current_qt_bullets = game.max_qt_bullets;
+}
+
 void draw_player(int x, int y, int gun_direction) {
     //clear();  // Limpa a tela antes de redesenhar
 
@@ -43,148 +88,234 @@ void draw_player(int x, int y, int gun_direction) {
 	}
     mvprintw(y + 1, x, " /_\\ ");     
     mvprintw(y + 2, x, "|___|"); 
+	
+	mvprintw(40, 0, "Municao: %d / %d", game.current_qt_bullets, game.max_qt_bullets); 
+	switch (game.difficulty_level) {
+		case 1:
+			mvprintw(41, 0, "Dificuldade: Facil"); 
+		break;
+		case 2:
+			mvprintw(41, 0, "Dificuldade: Medio"); 
+		break;
+		case 3:
+			mvprintw(41, 0, "Dificuldade: Dificil"); 
+		break;
+	}
+	mvprintw(42, 0, "Quantidade inimigos destruidos: %d%%", (game.qt_destroyed_enemy * 100) /game.qt_enemy); 
     refresh();
-    //refresh();  // Atualiza a tela para exibir as mudanças
 }
 
-// Função para movimentar o jogador
 void *move_player(void *arg) {
     while (true) {
-        // Limita o movimento do jogador dentro da tela
+        // Check if player is inside of the screen
         if (player_y < 0) player_y = 0;
-        if (player_y > LINES - 3) player_y = LINES - 3; // -3 para a nave caber na tela
+        if (player_y > LINES - 3) player_y = LINES - 3;
 
 		if (player_x < 0) player_x = 0;
-		if (player_x > LINES - 3) player_x = LINES - 3; // -3 para a nave caber na tela
+		if (player_x > LINES - 3) player_x = LINES - 3;
 
-        // Redesenha o jogador na nova posição
         draw_player(player_x, player_y, gun_direction);
 		
-        //usleep(50000); // Pequena pausa para simular movimento suave
-		
+        usleep(50000); 
     }
     return NULL;
+}
+
+void *enemy_move(void *arg) {
+	struct Enemy enemy;
+
+	enemy.life = true;
+	
+	while (enemy.life) {
+		clear();
+		mvprintw(enemy.y, enemy.x, "\\-/"); 
+		enemy.y += game.fall_velocity;
+		
+		if (enemy.y >= 34) {
+			enemy.life = false;
+		}
+		
+		usleep(80000);
+		refresh();
+	}
+	clear();
+	pthread_exit(NULL);
+}
+
+
+void *create_enemy(void *arg) {
+    // Encontra um slot livre no array de inimigos
+	if (rand() % 100 < 50) {
+		for (int i = 0; i < game.qt_enemy; ++i) {
+			if (!enemy_list.enemies[i].life) {
+				enemy_list.enemies[i].y = 0;
+				enemy_list.enemies[i].x = rand() % (COLS - 2) + 1; // Posição aleatória na largura da tela
+				enemy_list.enemies[i].life = true;
+
+				// Cria a thread para o novo inimigo
+				pthread_t enemy_thread;
+				pthread_create(&enemy_thread, NULL, enemy_move, (void *)&enemy_list.enemies[i]);
+
+				break;  // Sai do loop ao criar um novo inimigo
+			}
+		}
+	}
+	return NULL;
 }
 
 void *draw_scenario(void *arg) {
 	while (true) {
 		//clear();
 		usleep(50000);
-		
 	}
 	return NULL;
 }
 
-// Função para inicializar o jogo
 void init_game() {
-    // Inicializa a biblioteca ncurses
     initscr();
-    cbreak();   // Desabilita o buffer de linha para leitura imediata de caracteres
-    noecho();   // Não ecoa os caracteres digitados pelo usuário
-    keypad(stdscr, TRUE);  // Permite a captura de teclas especiais como setas
+    cbreak();  
+    noecho(); 
+    keypad(stdscr, TRUE); 
 
-    // Inicializa o mutex
+    // Init o mutex
     pthread_mutex_init(&mutex, NULL);
 
-    // Cria a thread para movimentar o jogador
+    // Create a thread for player
     pthread_t player_thread;
     pthread_create(&player_thread, NULL, move_player, NULL);
 	
+    // Create a thread for scenario
 	pthread_t scenario_thread;
     pthread_create(&scenario_thread, NULL, draw_scenario, NULL);
-	
+
+	pthread_t create_enemy_thread;
+    pthread_create(&create_enemy_thread, NULL, create_enemy, NULL);
+
+	bullet_list.bullets = (struct Bullet *)malloc(game.max_qt_bullets * sizeof (struct Bullet));
+	enemy_list.enemies = (struct Enemy *)malloc(20 * sizeof (struct Enemy));
 }
 
-
-void *enemy_move(void *arg) {
-	int enemy_y = 0;
-	int enemy_x = 50;
-	int enemy_life = true;
-	
-	while (enemy_life) {
-		//clear();
-		mvprintw(enemy_y, enemy_x, "\\-/"); 
-		enemy_y += 1;
-		
-		if (enemy_y >= 34) {
-			enemy_life = false;
-		}
-		
-		//usleep(50000);
-		refresh();
-	}
-	//clear();
-	game.current_qt_enemy -= 1;
-	pthread_exit(NULL);
-}
-
-void set_difficulty(int difficulty_level) {
-	
-	game.current_qt_bullets = 0;
-	game.current_qt_enemy= 0;
-	switch (difficulty_level) {
-		case 1:
-			game.max_qt_bullets = 10;
-			game.max_qt_enemy = 5;
-			printf("> Dificuldade alterada para facil\n");
-		break;
-		case 2:
-			game.max_qt_bullets = 10;
-			game.max_qt_enemy = 5;
-			printf("> Dificuldade alterada para medio\n");
-		break;
-		case 3:
-			printf("> Dificuldade alterada para dificil\n");
-		break;
-		case 4:
-		break;
-
-	}
-}
 
 void *bullet_move(void *arg) {
-	int bullet_y = player_y;
-	int bullet_x = player_x;
-	int bullet_direction = gun_direction;
-	int bullet_life = true;
-	
-	while (bullet_life) {
-
-		switch (bullet_direction) {
-			case 0:
-				mvprintw(bullet_y, bullet_x, "_"); 
-				bullet_x -= 1;
-			break;
-			case 1:
-				mvprintw(bullet_y, bullet_x + 2, "\\"); 
-				bullet_x -= 1;
-				bullet_y -= 1;
-			break;
-			case 2:
-				mvprintw(bullet_y, bullet_x + 2, "|"); 
-				bullet_y -= 1;
-			break;
-			case 3:
-				mvprintw(bullet_y, bullet_x + 2, "/"); 
-				bullet_x += 1;
-				bullet_y -= 1;
-			break;
-			case 4:
-				mvprintw(bullet_y, bullet_x + 4, "_"); 
-				bullet_x += 1;
+	struct Bullet *bullet = NULL;
+	for (int i = 0; i < game.max_qt_bullets; ++i) {
+		if (!bullet_list.bullets[i].life) {
+			bullet = &bullet_list.bullets[i];
 			break;
 		}
-		
-		
-		if (bullet_y <= -2 || bullet_x < -2 || bullet_x >= 70 + 5) {
-			bullet_life = false;
-		}
-		
-        //usleep(50000);
 	}
-	//clear();
-	game.current_qt_bullets -= 1;
+	bullet->y = player_y;
+	bullet->x = player_x;
+	bullet->life = true;
+	bullet->direction_x = 0;
+	bullet->direction_y = 0;
+	bullet->img[0] = '.';
+
+	switch (gun_direction) {
+		case 0:
+			bullet->x -= 1;
+			bullet->direction_x = -1;
+			bullet->img[0] = '_';
+		break;
+		case 1:
+			bullet->direction_x = -1;
+			bullet->direction_y = -1;
+			bullet->img[0] = '\\';
+		break;
+		case 2:
+			bullet->direction_y = -1;
+			bullet->img[0] = '|';
+		break;
+		case 3:
+			bullet->direction_x = 1;
+			bullet->direction_y = -1;
+			bullet->img[0] = '/';
+		break;
+		case 4:
+			bullet->x += 2;
+			bullet->direction_x = 1;
+			bullet->img[0] = '_';
+		break;
+	}
+	
+	bullet->x -= 2;
+	while (bullet->life) {
+		clear();
+		mvprintw(bullet->y, bullet->x + 4, bullet->img); 
+		bullet->x += bullet->direction_x;
+		bullet->y += bullet->direction_y;
+		if (bullet->y <= -2 || bullet->x < -2 || bullet->x >= 70 + 5) {
+			bullet->life = false;
+		}
+		
+        usleep(50000);
+		refresh();
+	}
+	clear();
 	pthread_exit(NULL);
+}
+
+
+void hud_interactions (int input) {
+	switch (input) {
+		case 27: //Esc - leave game
+			game_state = 0;
+		break;
+		case 32: //Space - shoot
+			if (game.current_qt_bullets > 0) {
+				pthread_mutex_lock(&mutex); 
+				game.current_qt_bullets -= 1;
+				pthread_mutex_unlock(&mutex); 
+				pthread_t bullet_thread;
+				pthread_create(&bullet_thread, NULL, bullet_move, NULL);
+			}
+		break;
+		case 97: //D - move left
+			player_x += -1;
+		break;
+		case 100: //A - move right
+			player_x += +1;
+		break;
+		case 114: //R - reload gun
+			if (game.current_qt_bullets < game.max_qt_bullets) {
+				mvprintw(40, 20, "Recarregando..."); 
+				usleep(500000); 
+				pthread_mutex_lock(&mutex); 
+				game.current_qt_bullets = game.max_qt_bullets;
+				pthread_mutex_unlock(&mutex); 
+				refresh();
+				clear();
+			} else {
+				mvprintw(40, 20, "Arma ja municiada."); 
+			}
+
+		break;
+		case 260: //Arrow left - turns gun to left
+			gun_direction -= 1;
+			break;
+		case 261:  //Arrow right - turns gun to right
+			gun_direction += 1;
+			break;
+	}
+}
+
+void game_loop() {
+	srand(time(NULL));
+	int input;
+	//create_enemy();	
+	while (true) {
+		
+		input = getch();  // Get keyboard option
+		hud_interactions(input);
+		
+		// Gun direction 
+		/* 0: -180º / 1: -45º / 2: +90º / 3: +45º / 4: +180º*/
+		if (gun_direction < 0) {
+			gun_direction = 0;
+		} else if (gun_direction > 4) {
+			gun_direction = 4;
+		}
+	}
 }
 
 int main() {
@@ -200,10 +331,8 @@ int main() {
 			printf("3. Sair\n");
 			printf("Escolha uma opcao: ");
 
-			// Leitura segura da opção do menu
-			input_success = scanf("%d", &option);
-
-			// Verifica se a entrada é um número inteiro
+			// Check if input is an integer
+			input_success = scanf("%d", &option);			
 			if (input_success != 1) {
 				printf("\n> Opcao invalida. Escolha novamente.\n");
 				while (getchar() != '\n');
@@ -215,107 +344,32 @@ int main() {
 					game_state = 1;
 				break;
 				case 2:
+					printf("\n");
 					printf("1. Facil\n");
 					printf("2. Medio\n");
 					printf("3. Dificil\n");
 					printf("4. Voltar\n");
+					printf("Escolha uma opcao: ");
 					
+					input_success = scanf("%d", &difficulty_option);
+
 					if (difficulty_option > 0 && difficulty_option < 4) {
 						set_difficulty(difficulty_option);
+					} else {
+						printf("\n> Opcao invalida. Escolha novamente.\n");
 					}
-					switch (difficulty_option) {
-						case 1:
-							game.max_qt_bullets = 10;
-							game.max_qt_enemy = 5;
-							printf("> Dificuldade alterada para facil\n");
-						break;
-						case 2:
-							printf("> Dificuldade alterada para medio\n");
-						break;
-						case 3:
-							printf("> Dificuldade alterada para dificil\n");
-						break;
-						case 4:
-						break;
-					}
-					/*
-					int max_qt_bullets;
-	int current_qt_bullets; 
-	int max_qt_enemy;
-	int current_qt_enemy;
-} game;
-					*/
 				break;
 				case 3:
 					game_state = -1;
 				break;
 				default:
-					printf("> Opcao invalida. \n");
+					printf("\n> Opcao invalida. Escolha novamente.\n");
 				break;
 			}
 			
 		} else if (game_state == 1) {
 			init_game();
-			srand(time(NULL));
-			int c;
-			int numeroAleatorio = rand() % 100 + 1;
-			
-			while (true) {
-				for (int i = 0; i <= 100; ++i) {
-			if (i == numeroAleatorio) {
-				//mvprintw(0 + 1, 10, "%d",numeroAleatorio);
-			} else {
-				//mvprintw(0 + 1, 10, " i %d",i);
-			}
-		}		
-		
-        c = getch();  // Get keyboard option
-		switch (c) {
-			case 97: //move left
-				player_x += -1;
-			break;
-			case 100: //move right
-				player_x += +1;
-			break;
-			case 32: //shoot
-				if (game.current_qt_bullets < game.max_qt_bullets) {
-					pthread_mutex_lock(&mutex); 
-					game.current_qt_bullets += 1;
-					pthread_mutex_unlock(&mutex); 
-					pthread_t bullet_thread;
-					pthread_create(&bullet_thread, NULL, bullet_move, NULL);
-				}
-			break;
-			
-			case 102:
-				if (game.current_qt_enemy < game.max_qt_enemy) {
-					pthread_mutex_lock(&mutex); 
-					game.current_qt_enemy += 1;
-					pthread_mutex_unlock(&mutex); 
-					pthread_t enemy_thread;
-					pthread_create(&enemy_thread, NULL, enemy_move, NULL);
-				}
-				
-			break;
-			
-			case 260: // left
-				gun_direction -= 1;
-				break;
-			case 261:  // right 
-				//pthread_mutex_lock(&mutex); // Início da região crítica
-				gun_direction += 1;
-				//pthread_mutex_unlock(&mutex); // Fim da região crítica
-
-				break;
-		}
-		
-		// Check gun direction
-		if (gun_direction < 0) {
-			gun_direction = 0;
-		} else if (gun_direction > 4) {
-			gun_direction = 4;
-		}
-			}
+			game_loop();
 		}
     }
 
